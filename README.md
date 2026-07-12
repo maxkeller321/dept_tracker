@@ -13,7 +13,7 @@ prebuilt image.
 ```yaml
 services:
   dept-tracker:
-    image: ghcr.io/OWNER/dept-tracker:latest
+    image: ghcr.io/maxkeller321/dept-tracker:latest
     container_name: dept-tracker
     ports:
       - "8080:8080"                  # host:container — change the host port if 8080 is taken
@@ -28,8 +28,8 @@ services:
     restart: unless-stopped
 ```
 
-> Replace **`OWNER`** with the GitHub owner of this repo (lowercase). Then browse to
-> **`http://<server-ip>:8080`** and click **Create account** to set your username and password.
+> Then browse to **`http://<server-ip>:8080`** and click **Create account** to set your
+> username and password.
 
 **Already have a compose stack?** Just paste the `dept-tracker:` block under your existing
 `services:` and run `docker compose up -d dept-tracker`.
@@ -38,8 +38,8 @@ services:
 <summary><b>Prefer to build from source instead of pulling the image?</b></summary>
 
 ```bash
-git clone https://github.com/OWNER/dept-tracker.git
-cd dept-tracker
+git clone https://github.com/maxkeller321/dept_tracker.git
+cd dept_tracker
 docker compose -f docker/compose.yml up -d --build
 ```
 
