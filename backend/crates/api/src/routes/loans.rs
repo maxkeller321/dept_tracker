@@ -2,7 +2,7 @@ use axum::extract::{Path, Query, State};
 use axum::Json;
 use chrono::Utc;
 use domain::interest::compute_interest_summary;
-use domain::projection::project_payoff;
+use domain::projection::{compute_amortization_schedule, project_payoff};
 use domain::types::{PaymentFrequency, PaymentType};
 use serde::Deserialize;
 
@@ -19,9 +19,13 @@ pub struct CreateLoanBody {
     pub original_principal_minor: Option<i64>,
     pub payment_frequency: String,
     pub payment_type: String,
+    pub tilgung_euro_minor: Option<i64>,
+    pub tilgung_percent_basis_points: Option<i32>,
+    /// Legacy alias for tilgung_euro_minor
     pub fixed_payment_minor: Option<i64>,
     pub apr_basis_points: Option<i32>,
     pub loan_start_date: Option<String>,
+    pub first_payment_date: Option<String>,
     pub recurring_sonderzahlungen: Option<Vec<RecurringInput>>,
     pub backfill_payments: Option<Vec<BackfillInput>>,
 }
@@ -42,6 +46,8 @@ pub struct BackfillInput {
 #[derive(Deserialize)]
 pub struct UpdateLoanBody {
     pub label: Option<String>,
+    pub tilgung_euro_minor: Option<i64>,
+    pub tilgung_percent_basis_points: Option<i32>,
     pub fixed_payment_minor: Option<i64>,
     pub apr_basis_points: Option<i32>,
     pub payment_frequency: Option<String>,
@@ -62,37 +68,51 @@ pub async fn update_loan(
     let exists = db::loans::get_loan(&state.pool, &id)
         .await
         .map_err(|e| ApiError::internal(e.to_string()))?;
-    if exists.is_none() {
-        return Err(ApiError::not_found("loan not found"));
-    }
-    let row = exists.unwrap();
-    let clear_fixed = body.payment_type.as_deref() == Some("apr");
+    let row = exists.ok_or_else(|| ApiError::not_found("loan not found"))?;
+
+    let ptype_str = body
+        .payment_type
+        .as_deref()
+        .unwrap_or(&row.payment_type);
+    let ptype = parse_payment_type(ptype_str)?;
+
     let merged_apr = body.apr_basis_points.or(row.apr_basis_points);
-    let merged_fixed = if clear_fixed {
-        None
-    } else {
-        body.fixed_payment_minor.or(row.fixed_payment_minor)
-    };
     if merged_apr.is_none() {
         return Err(ApiError::bad_request("interest rate (APR) is required"));
     }
-    let effective_ptype = body.payment_type.as_deref().unwrap_or(&row.payment_type);
-    if effective_ptype == "fixed"
-        && (merged_fixed.is_none() || merged_fixed.unwrap_or(0) <= 0)
-    {
-        return Err(ApiError::bad_request("fixed payment must be positive"));
+
+    let tilgung_euro = body
+        .tilgung_euro_minor
+        .or(body.fixed_payment_minor)
+        .or(row.fixed_payment_minor);
+    let tilgung_pct = body
+        .tilgung_percent_basis_points
+        .or(row.tilgung_percent_basis_points);
+
+    match ptype {
+        PaymentType::TilgungEuro => {
+            if tilgung_euro.unwrap_or(0) <= 0 {
+                return Err(ApiError::bad_request("Tilgung (€) must be positive"));
+            }
+        }
+        PaymentType::TilgungPercent => {
+            if tilgung_pct.is_none() {
+                return Err(ApiError::bad_request("prozentuale Tilgung (%) is required"));
+            }
+        }
     }
+
     db::loans::update_loan(
         &state.pool,
         &id,
         db::loans::UpdateLoanParams {
             label: body.label,
-            fixed_payment_minor: body.fixed_payment_minor,
+            tilgung_euro_minor: tilgung_euro,
+            tilgung_percent_basis_points: tilgung_pct,
             apr_basis_points: body.apr_basis_points,
             payment_frequency: body.payment_frequency,
-            payment_type: body.payment_type,
+            payment_type: Some(ptype.as_str().to_string()),
             notes: body.notes,
-            clear_fixed,
         },
     )
     .await
@@ -106,10 +126,25 @@ pub async fn create_loan(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let freq = parse_frequency(&body.payment_frequency)?;
     let ptype = parse_payment_type(&body.payment_type)?;
+    let tilgung_euro = body.tilgung_euro_minor.or(body.fixed_payment_minor);
+    let original = body
+        .original_principal_minor
+        .or_else(|| {
+            if ptype == PaymentType::TilgungPercent {
+                Some(body.remaining_balance_minor)
+            } else {
+                None
+            }
+        });
     let start = body
         .loan_start_date
         .as_deref()
         .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    let first_payment = body
+        .first_payment_date
+        .as_deref()
+        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+        .or(start);
     let recurring: Vec<_> = body
         .recurring_sonderzahlungen
         .unwrap_or_default()
@@ -132,12 +167,14 @@ pub async fn create_loan(
             label: body.label,
             setup_mode: body.setup_mode,
             remaining_balance_minor: body.remaining_balance_minor,
-            original_principal_minor: body.original_principal_minor,
+            original_principal_minor: original,
             payment_frequency: freq,
             payment_type: ptype,
-            fixed_payment_minor: body.fixed_payment_minor,
+            tilgung_euro_minor: tilgung_euro,
+            tilgung_percent_basis_points: body.tilgung_percent_basis_points,
             apr_basis_points: body.apr_basis_points,
             loan_start_date: start,
+            first_payment_date: first_payment,
             recurring,
             backfill,
         },
@@ -183,12 +220,35 @@ pub async fn loan_detail(
             .map(|d| d.to_string()),
         "projected_payoff_date": projection.projected_payoff_date.map(|d| d.to_string()),
         "payment_type": row.payment_type,
+        "tilgung_euro_minor": row.fixed_payment_minor,
+        "tilgung_percent_basis_points": row.tilgung_percent_basis_points,
+        "loan_start_date": row.loan_start_date,
+        "first_payment_date": row.first_payment_date,
         "apr_percent": calc.apr_basis_points.map(|b| b as f64 / 100.0),
         "interest_paid_to_date": { "amount_minor": interest.interest_paid_minor, "currency": currency },
         "interest_remaining_estimate": { "amount_minor": interest.interest_remaining_minor, "currency": currency },
         "interest_message": interest.message,
         "upcoming_scheduled": pending,
         "progress_percent": domain::dashboard::build_dashboard(std::slice::from_ref(&calc), &currency, Utc::now().date_naive()).loans.first().map(|l| l.progress_percent).unwrap_or(0.0),
+    })))
+}
+
+pub async fn loan_amortization(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let as_of = Utc::now().date_naive();
+    let row = db::loans::get_loan(&state.pool, &id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("loan not found"))?;
+    let calc = db::loans::load_loan_calc(&state.pool, &row)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let rows = compute_amortization_schedule(&calc, as_of);
+    Ok(Json(serde_json::json!({
+        "total_payments": rows.len(),
+        "rows": rows,
     })))
 }
 
@@ -225,9 +285,6 @@ fn parse_frequency(s: &str) -> Result<PaymentFrequency, ApiError> {
 }
 
 fn parse_payment_type(s: &str) -> Result<PaymentType, ApiError> {
-    match s {
-        "fixed" => Ok(PaymentType::Fixed),
-        "apr" => Ok(PaymentType::Apr),
-        _ => Err(ApiError::bad_request("invalid payment_type")),
-    }
+    s.parse()
+        .map_err(|_| ApiError::bad_request("invalid payment_type; use tilgung_percent or tilgung_euro"))
 }

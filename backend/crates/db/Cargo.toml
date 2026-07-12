@@ -13,6 +13,8 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+argon2 = "0.5"
+rand_core = { version = "0.6", features = ["std"] }
 tempfile = "3"
 
 [dev-dependencies]

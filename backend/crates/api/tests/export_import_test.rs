@@ -1,23 +1,21 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-async fn test_app() -> axum::Router {
-    let db = db::test_support::test_pool().await;
-    api::router::app(api::AppState { pool: db.pool }, None)
-}
-
 #[tokio::test]
 async fn export_import_round_trip() {
-    let app = test_app().await;
+    let app = common::app().await;
+    let cookie = common::session_cookie(&app).await;
     let create = serde_json::json!({
         "label": "Round Trip",
         "setup_mode": "quick",
         "remaining_balance_minor": 3000000,
         "payment_frequency": "monthly",
-        "payment_type": "fixed",
-        "fixed_payment_minor": 50000,
+        "payment_type": "tilgung_euro",
+        "tilgung_euro_minor": 50000,
         "apr_basis_points": 300
     });
     app.clone()
@@ -26,6 +24,7 @@ async fn export_import_round_trip() {
                 .method("POST")
                 .uri("/api/v1/loans")
                 .header("content-type", "application/json")
+                .header("cookie", &cookie)
                 .body(Body::from(create.to_string()))
                 .unwrap(),
         )
@@ -37,6 +36,7 @@ async fn export_import_round_trip() {
         .oneshot(
             Request::builder()
                 .uri("/api/v1/export")
+                .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -55,6 +55,7 @@ async fn export_import_round_trip() {
                 .method("POST")
                 .uri("/api/v1/import?confirm=true")
                 .header("content-type", "application/json")
+                .header("cookie", &cookie)
                 .body(Body::from(export_bytes.to_vec()))
                 .unwrap(),
         )
@@ -66,6 +67,7 @@ async fn export_import_round_trip() {
         .oneshot(
             Request::builder()
                 .uri("/api/v1/dashboard")
+                .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
         )

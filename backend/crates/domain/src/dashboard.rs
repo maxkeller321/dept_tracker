@@ -2,6 +2,7 @@ use chrono::NaiveDate;
 use serde::Serialize;
 
 use crate::money::{apr_basis_to_percent, minor_to_decimal};
+use crate::payoff_timeline::{build_payoff_timeline, PayoffTimeline};
 use crate::projection::{monthly_equivalent_payment, project_payoff};
 use crate::types::LoanCalcInput;
 
@@ -16,6 +17,8 @@ pub struct LoanSummary {
     pub id: String,
     pub label: String,
     pub remaining_balance: MoneyDto,
+    /// Original loan amount at origination (None if not recorded).
+    pub original_principal: Option<MoneyDto>,
     pub periodic_payment: MoneyDto,
     pub payment_frequency: String,
     pub last_payment_date: Option<String>,
@@ -33,6 +36,7 @@ pub struct HouseholdSummary {
 pub struct DashboardResponse {
     pub household: HouseholdSummary,
     pub loans: Vec<LoanSummary>,
+    pub payoff_timeline: PayoffTimeline,
 }
 
 pub fn build_dashboard(loans: &[LoanCalcInput], currency: &str, as_of: NaiveDate) -> DashboardResponse {
@@ -61,6 +65,7 @@ pub fn build_dashboard(loans: &[LoanCalcInput], currency: &str, as_of: NaiveDate
             id: loan.id.clone(),
             label: loan.label.clone(),
             remaining_balance: money(loan.remaining_balance_minor, currency),
+            original_principal: loan.original_principal_minor.map(|p| money(p, currency)),
             periodic_payment: money(projection.periodic_payment_minor, currency),
             payment_frequency: match loan.payment_frequency {
                 crate::types::PaymentFrequency::Monthly => "monthly".into(),
@@ -80,6 +85,7 @@ pub fn build_dashboard(loans: &[LoanCalcInput], currency: &str, as_of: NaiveDate
             total_monthly_obligation: money(total_monthly, currency),
         },
         loans: summaries,
+        payoff_timeline: build_payoff_timeline(loans, as_of),
     }
 }
 

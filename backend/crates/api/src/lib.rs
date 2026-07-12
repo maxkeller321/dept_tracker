@@ -1,4 +1,5 @@
 pub mod error;
+pub mod middleware;
 pub mod router;
 pub mod routes;
 
@@ -14,6 +15,7 @@ pub async fn build_app(static_dir: Option<PathBuf>) -> Result<axum::Router, Box<
     let pool = db::init_pool(&data_dir).await?;
     db::run_migrations(&pool).await?;
     db::settings::ensure_settings(&pool).await?;
+    db::auth::bootstrap_auth(&pool).await?;
     let state = AppState { pool };
     Ok(router::app(state, static_dir))
 }

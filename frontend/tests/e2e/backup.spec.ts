@@ -10,7 +10,7 @@ test('export and import JSON round-trip', async ({ page }) => {
   await page.getByLabel('Name').fill('Backup Test');
   await fillNumber(page, '#balance', '5000');
   await fillNumber(page, '#apr', '2.5');
-  await fillNumber(page, '#fixed', '100');
+  await fillNumber(page, '#tilgung-euro', '100');
   const create = page.waitForResponse(
     (r) => r.url().includes('/api/v1/loans') && r.request().method() === 'POST',
   );

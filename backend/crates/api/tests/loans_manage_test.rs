@@ -1,21 +1,18 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-async fn test_app() -> axum::Router {
-    let db = db::test_support::test_pool().await;
-    api::router::app(api::AppState { pool: db.pool }, None)
-}
-
-async fn seed(app: &axum::Router) -> String {
+async fn seed(app: &axum::Router, cookie: &str) -> String {
     let body = serde_json::json!({
         "label": "Manage Test",
         "setup_mode": "quick",
         "remaining_balance_minor": 5000000,
         "payment_frequency": "monthly",
-        "payment_type": "fixed",
-        "fixed_payment_minor": 100000,
+        "payment_type": "tilgung_euro",
+        "tilgung_euro_minor": 100000,
         "apr_basis_points": 400
     });
     let response = app
@@ -25,6 +22,7 @@ async fn seed(app: &axum::Router) -> String {
                 .method("POST")
                 .uri("/api/v1/loans")
                 .header("content-type", "application/json")
+                .header("cookie", cookie)
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -39,8 +37,9 @@ async fn seed(app: &axum::Router) -> String {
 
 #[tokio::test]
 async fn patch_archive_delete_and_list_payments() {
-    let app = test_app().await;
-    let id = seed(&app).await;
+    let app = common::app().await;
+    let cookie = common::session_cookie(&app).await;
+    let id = seed(&app, &cookie).await;
 
     let patch = serde_json::json!({ "label": "Renamed Loan" });
     let res = app
@@ -50,6 +49,7 @@ async fn patch_archive_delete_and_list_payments() {
                 .method("PATCH")
                 .uri(format!("/api/v1/loans/{id}"))
                 .header("content-type", "application/json")
+                .header("cookie", &cookie)
                 .body(Body::from(patch.to_string()))
                 .unwrap(),
         )
@@ -65,6 +65,7 @@ async fn patch_archive_delete_and_list_payments() {
                 .method("POST")
                 .uri(format!("/api/v1/loans/{id}/payments"))
                 .header("content-type", "application/json")
+                .header("cookie", &cookie)
                 .body(Body::from(pay.to_string()))
                 .unwrap(),
         )
@@ -77,6 +78,7 @@ async fn patch_archive_delete_and_list_payments() {
         .oneshot(
             Request::builder()
                 .uri(format!("/api/v1/loans/{id}/payments"))
+                .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -93,6 +95,7 @@ async fn patch_archive_delete_and_list_payments() {
             Request::builder()
                 .method("POST")
                 .uri(format!("/api/v1/loans/{id}/archive"))
+                .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -106,6 +109,7 @@ async fn patch_archive_delete_and_list_payments() {
             Request::builder()
                 .method("DELETE")
                 .uri(format!("/api/v1/loans/{id}?confirm=true"))
+                .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
         )

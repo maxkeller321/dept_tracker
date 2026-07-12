@@ -7,15 +7,17 @@
   export let loanId = '';
   export let initialLabel = '';
   export let initialAprPercent: number | null = null;
-  export let initialFixedPayment: number | null = null;
-  export let initialPaymentType: 'fixed' | 'apr' = 'fixed';
+  export let initialTilgungEuro: number | null = null;
+  export let initialTilgungPercent: number | null = null;
+  export let initialPaymentType: 'tilgung_percent' | 'tilgung_euro' = 'tilgung_euro';
 
   const dispatch = createEventDispatcher<{ saved: void; close: void }>();
 
   let label = '';
-  let fixedPayment = '';
+  let tilgungEuro = '';
+  let tilgungPercent = '';
   let aprPercent = '';
-  let paymentType: 'fixed' | 'apr' = 'fixed';
+  let paymentType: 'tilgung_percent' | 'tilgung_euro' = 'tilgung_euro';
   let error = '';
 
   $: tr = $t;
@@ -24,19 +26,24 @@
     label = initialLabel;
     paymentType = initialPaymentType;
     aprPercent = initialAprPercent != null ? String(initialAprPercent) : '';
-    fixedPayment =
-      initialFixedPayment != null ? String(initialFixedPayment / 100) : '';
+    tilgungEuro =
+      initialTilgungEuro != null ? String(initialTilgungEuro / 100) : '';
+    tilgungPercent =
+      initialTilgungPercent != null ? String(initialTilgungPercent / 100) : '';
   }
 
   function fieldValue(id: string, fallback: string) {
+    const bound = fallback.trim();
     const el = document.getElementById(id) as HTMLInputElement | null;
-    return (el?.value ?? fallback).trim();
+    const dom = (el?.value ?? '').trim();
+    return bound || dom;
   }
 
   async function save() {
     error = '';
     const aprVal = fieldValue('edit-apr', aprPercent);
-    const fixedVal = fieldValue('edit-fixed', fixedPayment);
+    const euroVal = fieldValue('edit-tilgung-euro', tilgungEuro);
+    const pctVal = fieldValue('edit-tilgung-pct', tilgungPercent);
     if (!aprVal) {
       error = tr('errors.aprRequired');
       return;
@@ -46,12 +53,18 @@
       payment_type: paymentType,
       apr_basis_points: Math.round(parseFloat(aprVal) * 100),
     };
-    if (paymentType === 'fixed') {
-      if (!fixedVal) {
-        error = tr('errors.fixedRequired');
+    if (paymentType === 'tilgung_euro') {
+      if (!euroVal) {
+        error = tr('errors.tilgungEuroRequired');
         return;
       }
-      body.fixed_payment_minor = Math.round(parseFloat(fixedVal) * 100);
+      body.tilgung_euro_minor = Math.round(parseFloat(euroVal) * 100);
+    } else {
+      if (!pctVal) {
+        error = tr('errors.tilgungPercentRequired');
+        return;
+      }
+      body.tilgung_percent_basis_points = Math.round(parseFloat(pctVal) * 100);
     }
     try {
       await api.updateLoan(loanId, body);
@@ -82,7 +95,10 @@
       on:click|stopPropagation={() => {}}
       on:keydown|stopPropagation={() => {}}
     >
-      <h2 id="edit-loan-title">{tr('editLoan.title')}</h2>
+      <div class="modal-header">
+        <h2 id="edit-loan-title">{tr('editLoan.title')}</h2>
+      </div>
+      <div class="modal-body">
       <div class="field">
         <label for="edit-label">{tr('editLoan.name')}</label>
         <input id="edit-label" bind:value={label} />
@@ -94,30 +110,28 @@
       <div class="field">
         <label for="edit-ptype">{tr('editLoan.paymentMethod')}</label>
         <select id="edit-ptype" bind:value={paymentType}>
-          <option value="fixed">{tr('addLoan.fixedOption')}</option>
-          <option value="apr">{tr('addLoan.aprOption')}</option>
+          <option value="tilgung_percent">{tr('addLoan.tilgungPercentOption')}</option>
+          <option value="tilgung_euro">{tr('addLoan.tilgungEuroOption')}</option>
         </select>
       </div>
-      {#if paymentType === 'fixed'}
+      {#if paymentType === 'tilgung_percent'}
         <div class="field">
-          <label for="edit-fixed">{tr('editLoan.periodicPayment')}</label>
-          <input id="edit-fixed" type="number" step="0.01" bind:value={fixedPayment} required />
+          <label for="edit-tilgung-pct">{tr('addLoan.tilgungPercent')}</label>
+          <input id="edit-tilgung-pct" type="number" step="0.01" min="0" bind:value={tilgungPercent} required />
+        </div>
+      {:else}
+        <div class="field">
+          <label for="edit-tilgung-euro">{tr('addLoan.tilgungEuro')}</label>
+          <input id="edit-tilgung-euro" type="number" step="0.01" min="0" bind:value={tilgungEuro} required />
         </div>
       {/if}
       {#if error}<p class="error">{error}</p>{/if}
-      <div class="actions">
+      <div class="modal-actions">
         <button type="button" class="secondary" on:click={() => dispatch('close')}>{tr('common.cancel')}</button>
-        <button type="button" on:click={save}>{tr('common.saveChanges')}</button>
+        <button type="button" class="primary-accent" on:click={save}>{tr('common.saveChanges')}</button>
+      </div>
       </div>
     </div>
   </div>
 {/if}
 
-<style>
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 0.5rem;
-    margin-top: 1rem;
-  }
-</style>

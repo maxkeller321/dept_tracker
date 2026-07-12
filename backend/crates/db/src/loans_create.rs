@@ -1,6 +1,6 @@
 use chrono::Utc;
 use domain::payment_split::split_payment;
-use domain::types::{LoanCalcInput, PaymentFrequency, PaymentType};
+use domain::types::{LoanCalcInput, LoanStatus, PaymentFrequency, PaymentType};
 use domain::validation::{validate_create_loan, CreateLoanValidation};
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -12,9 +12,11 @@ pub struct CreateLoanParams {
     pub original_principal_minor: Option<i64>,
     pub payment_frequency: PaymentFrequency,
     pub payment_type: PaymentType,
-    pub fixed_payment_minor: Option<i64>,
+    pub tilgung_euro_minor: Option<i64>,
+    pub tilgung_percent_basis_points: Option<i32>,
     pub apr_basis_points: Option<i32>,
     pub loan_start_date: Option<chrono::NaiveDate>,
+    pub first_payment_date: Option<chrono::NaiveDate>,
     pub recurring: Vec<(i64, u8, u8)>,
     pub backfill: Vec<(i64, chrono::NaiveDate)>,
 }
@@ -25,7 +27,8 @@ pub async fn create_loan(pool: &SqlitePool, params: CreateLoanParams) -> Result<
         remaining_balance_minor: params.remaining_balance_minor,
         payment_frequency: params.payment_frequency,
         payment_type: params.payment_type,
-        fixed_payment_minor: params.fixed_payment_minor,
+        tilgung_euro_minor: params.tilgung_euro_minor,
+        tilgung_percent_basis_points: params.tilgung_percent_basis_points,
         apr_basis_points: params.apr_basis_points,
     })
     .map_err(|e| e.to_string())?;
@@ -36,23 +39,25 @@ pub async fn create_loan(pool: &SqlitePool, params: CreateLoanParams) -> Result<
         PaymentFrequency::Monthly => "monthly",
         PaymentFrequency::Yearly => "yearly",
     };
-    let ptype = match params.payment_type {
-        PaymentType::Fixed => "fixed",
-        PaymentType::Apr => "apr",
-    };
+    let ptype = params.payment_type.as_str();
     let start = params
         .loan_start_date
         .map(|d| d.to_string())
         .unwrap_or_else(|| now[..10].to_string());
+    let first_payment = params
+        .first_payment_date
+        .or(params.loan_start_date)
+        .map(|d| d.to_string())
+        .unwrap_or_else(|| start.clone());
 
     let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
 
     sqlx::query(
         r#"INSERT INTO loans (
             id, label, status, setup_mode, original_principal_minor, remaining_balance_minor,
-            payment_frequency, payment_type, fixed_payment_minor, apr_basis_points,
-            loan_start_date, created_at, updated_at
-        ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            payment_frequency, payment_type, fixed_payment_minor, tilgung_percent_basis_points,
+            apr_basis_points, loan_start_date, first_payment_date, created_at, updated_at
+        ) VALUES (?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&id)
     .bind(&params.label)
@@ -61,9 +66,11 @@ pub async fn create_loan(pool: &SqlitePool, params: CreateLoanParams) -> Result<
     .bind(params.remaining_balance_minor)
     .bind(freq)
     .bind(ptype)
-    .bind(params.fixed_payment_minor)
+    .bind(params.tilgung_euro_minor)
+    .bind(params.tilgung_percent_basis_points)
     .bind(params.apr_basis_points)
     .bind(&start)
+    .bind(&first_payment)
     .bind(&now)
     .bind(&now)
     .execute(&mut *tx)
@@ -91,14 +98,19 @@ pub async fn create_loan(pool: &SqlitePool, params: CreateLoanParams) -> Result<
             let stub = LoanCalcInput {
                 id: id.clone(),
                 label: params.label.clone(),
-                status: domain::types::LoanStatus::Active,
+                status: LoanStatus::Active,
                 remaining_balance_minor: balance,
                 original_principal_minor: params.original_principal_minor,
                 payment_frequency: params.payment_frequency,
                 payment_type: params.payment_type,
-                fixed_payment_minor: params.fixed_payment_minor,
+                tilgung_euro_minor: params.tilgung_euro_minor,
+                tilgung_percent_basis_points: params.tilgung_percent_basis_points,
                 apr_basis_points: params.apr_basis_points,
                 loan_start_date: params.loan_start_date.unwrap_or_else(|| Utc::now().date_naive()),
+                first_payment_date: params
+                    .first_payment_date
+                    .or(params.loan_start_date)
+                    .unwrap_or_else(|| Utc::now().date_naive()),
                 recurring_extras: vec![],
                 scheduled_extras: vec![],
                 payments: vec![],

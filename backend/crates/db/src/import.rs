@@ -53,9 +53,9 @@ async fn import_loan_entry(
     sqlx::query(
         r#"INSERT INTO loans (
             id, label, status, setup_mode, original_principal_minor, remaining_balance_minor,
-            payment_frequency, payment_type, fixed_payment_minor, apr_basis_points,
-            loan_start_date, created_at, updated_at, archived_at, notes
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            payment_frequency, payment_type, fixed_payment_minor, tilgung_percent_basis_points,
+            apr_basis_points, loan_start_date, first_payment_date, created_at, updated_at, archived_at, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
     )
     .bind(&id)
     .bind(json_str(loan, "label")?)
@@ -65,9 +65,18 @@ async fn import_loan_entry(
     .bind(json_i64_req(loan, "remaining_balance_minor")?)
     .bind(json_str(loan, "payment_frequency")?)
     .bind(json_str(loan, "payment_type")?)
-    .bind(json_i64(loan, "fixed_payment_minor"))
+    .bind(
+        json_i64(loan, "fixed_payment_minor")
+            .or_else(|| json_i64(loan, "tilgung_euro_minor")),
+    )
+    .bind(json_i64(loan, "tilgung_percent_basis_points").map(|v| v as i32))
     .bind(json_i64(loan, "apr_basis_points").map(|v| v as i32))
     .bind(loan.get("loan_start_date").and_then(|v| v.as_str()))
+    .bind(
+        loan.get("first_payment_date")
+            .and_then(|v| v.as_str())
+            .or_else(|| loan.get("loan_start_date").and_then(|v| v.as_str())),
+    )
     .bind(loan.get("created_at").and_then(|v| v.as_str()).unwrap_or(&now))
     .bind(loan.get("updated_at").and_then(|v| v.as_str()).unwrap_or(&now))
     .bind(loan.get("archived_at").and_then(|v| v.as_str()))

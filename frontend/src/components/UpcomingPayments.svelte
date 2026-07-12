@@ -15,14 +15,16 @@
 </script>
 
 {#if items.length > 0}
-  <section class="upcoming">
+  <section class="panel upcoming">
     <h3>{tr('upcoming.title')}</h3>
-    <ul>
+    <ul class="data-list">
       {#each items as item (item.id)}
         <li>
-          <span>{formatMoney(item.amount_minor)} {tr('upcoming.on')} {formatDate(item.due_date)}</span>
+          <span class="tabular"
+            >{formatMoney(item.amount_minor)} {tr('upcoming.on')} {formatDate(item.due_date)}</span
+          >
           {#if onCancel && item.status === 'pending'}
-            <button type="button" class="secondary small" on:click={() => onCancel(item.id)}>{tr('upcoming.cancel')}</button>
+            <button type="button" class="secondary" on:click={() => onCancel(item.id)}>{tr('upcoming.cancel')}</button>
           {/if}
         </li>
       {/each}
@@ -31,24 +33,21 @@
 {/if}
 
 <style>
-  h3 {
-    font-size: 0.95rem;
-    margin: 1rem 0 0.5rem;
-  }
-  ul {
+  .data-list {
     list-style: none;
     padding: 0;
     margin: 0;
   }
-  li {
+  .data-list li {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 0.35rem 0;
-    border-bottom: 1px solid #f1f5f9;
+    gap: 0.75rem;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--color-border);
+    font-size: 0.875rem;
   }
-  .small {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.8rem;
+  .data-list li:last-child {
+    border-bottom: none;
   }
 </style>

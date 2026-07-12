@@ -56,19 +56,23 @@
     on:keydown={(e) => e.key === 'Escape' && dispatch('close')}
   >
     <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-title" tabindex="0">
-      <h2 id="settings-title">{tr('settings.title')}</h2>
-      <p class="muted">{tr('settings.body')}</p>
-      <div class="actions-col">
-        <button type="button" on:click={exportJson}>{tr('settings.export')}</button>
-        <label class="import-label">
-          {tr('settings.import')}
-          <input type="file" accept="application/json,.json" bind:this={fileInput} on:change={onFileSelected} />
-        </label>
+      <div class="modal-header">
+        <h2 id="settings-title">{tr('settings.title')}</h2>
+        <p class="muted">{tr('settings.body')}</p>
       </div>
-      {#if success}<p class="success">{success}</p>{/if}
-      {#if error}<p class="error">{error}</p>{/if}
-      <div class="actions">
-        <button type="button" class="secondary" on:click={() => dispatch('close')}>{tr('common.close')}</button>
+      <div class="modal-body">
+        <div class="actions-col">
+          <button type="button" class="secondary" on:click={exportJson}>{tr('settings.export')}</button>
+          <label class="import-label">
+            {tr('settings.import')}
+            <input type="file" accept="application/json,.json" bind:this={fileInput} on:change={onFileSelected} />
+          </label>
+        </div>
+        {#if success}<p class="success">{success}</p>{/if}
+        {#if error}<p class="error">{error}</p>{/if}
+        <div class="modal-actions">
+          <button type="button" class="secondary" on:click={() => dispatch('close')}>{tr('common.close')}</button>
+        </div>
       </div>
     </div>
   </div>
@@ -87,13 +91,8 @@
     flex-direction: column;
     gap: 0.35rem;
   }
-  .success {
-    color: #15803d;
-    font-size: 0.875rem;
-  }
-  .actions {
-    display: flex;
-    justify-content: flex-end;
-    margin-top: 1rem;
+  .import-label input[type='file'] {
+    font-size: 0.8125rem;
+    margin-top: 0.25rem;
   }
 </style>

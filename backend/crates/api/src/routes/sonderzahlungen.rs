@@ -12,6 +12,9 @@ pub struct ImmediateBody {
     pub paid_at: String,
     #[serde(default)]
     pub confirm_overpayment: bool,
+    /// When true, treat `paid_at` as a past date and rebuild loan balances from that point.
+    #[serde(default)]
+    pub recalculate_from_past: bool,
 }
 
 #[derive(Deserialize)]
@@ -36,9 +39,27 @@ pub async fn immediate(
             "payment exceeds balance; set confirm_overpayment=true",
         ));
     }
-    db::payment_events::record_sonderzahlung(&state.pool, &loan_id, body.amount_minor, paid_at)
+    let today = chrono::Utc::now().date_naive();
+    if body.recalculate_from_past {
+        if paid_at > today {
+            return Err(ApiError::bad_request(
+                "recalculate_from_past requires paid_at on or before today",
+            ));
+        }
+        db::payment_events::record_backdated_sonderzahlung(
+            &state.pool,
+            &loan_id,
+            body.amount_minor,
+            paid_at,
+            today,
+        )
         .await
         .map_err(ApiError::bad_request)?;
+    } else {
+        db::payment_events::record_sonderzahlung(&state.pool, &loan_id, body.amount_minor, paid_at)
+            .await
+            .map_err(ApiError::bad_request)?;
+    }
     loan_detail(State(state), Path(loan_id)).await
 }
 

@@ -1,7 +1,6 @@
 use chrono::Utc;
-use domain::amortization::effective_periodic_payment;
-use domain::due_payments::due_regular_payment_dates;
-use domain::payment_split::split_payment;
+use domain::due_payments::{due_regular_payment_dates, payment_due_anchor};
+use domain::payment_split::{split_payment, split_regular_payment};
 use domain::types::PaymentFrequency;
 use sqlx::SqlitePool;
 use uuid::Uuid;
@@ -36,7 +35,12 @@ async fn has_regular_on_date(
     Ok(row.is_some())
 }
 
+fn parse_naive_date(s: &str) -> Option<chrono::NaiveDate> {
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()
+}
+
 /// Apply all due regular installments through `as_of` (idempotent per due date).
+/// Due dates anchor on `first_payment_date`, falling back to `loan_start_date` (date-only, no UTC).
 pub async fn apply_due_regular_payments(
     pool: &SqlitePool,
     loan_id: &str,
@@ -56,18 +60,22 @@ pub async fn apply_due_regular_payments(
         PaymentFrequency::Monthly
     };
 
-    let start = row
+    let loan_start = row
         .loan_start_date
         .as_deref()
-        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
-        .or_else(|| chrono::NaiveDate::parse_from_str(&row.created_at[..10], "%Y-%m-%d").ok())
+        .and_then(parse_naive_date)
         .unwrap_or(as_of);
+    let first_payment = row
+        .first_payment_date
+        .as_deref()
+        .and_then(parse_naive_date);
+    let anchor = payment_due_anchor(first_payment, loan_start);
 
     let last_regular = last_regular_payment_date(pool, loan_id)
         .await
         .map_err(|e| e.to_string())?;
 
-    let due_dates = due_regular_payment_dates(start, frequency, last_regular, as_of);
+    let due_dates = due_regular_payment_dates(anchor, frequency, last_regular, as_of);
     let mut applied = 0u32;
 
     for due in due_dates {
@@ -87,16 +95,12 @@ pub async fn apply_due_regular_payments(
         let calc = load_loan_calc(pool, &fresh)
             .await
             .map_err(|e| e.to_string())?;
-        let amount = effective_periodic_payment(
-            calc.remaining_balance_minor,
-            calc.apr_basis_points,
-            calc.fixed_payment_minor,
-            calc.payment_frequency,
-        );
-        if amount <= 0 {
+        let split = split_regular_payment(&calc, calc.remaining_balance_minor);
+        if split.interest_portion_minor + split.principal_portion_minor <= 0 {
             break;
         }
-        record_regular_payment(pool, loan_id, amount, due, Some("auto".into())).await?;
+        let amount = split.interest_portion_minor + split.principal_portion_minor;
+        record_regular_payment(pool, loan_id, amount, due, split, Some("auto".into())).await?;
         applied += 1;
     }
 
@@ -123,14 +127,9 @@ pub async fn record_regular_payment(
     loan_id: &str,
     amount_minor: i64,
     paid_at: chrono::NaiveDate,
+    split: domain::payment_split::PaymentSplit,
     note: Option<String>,
 ) -> Result<(), String> {
-    let row = get_loan(pool, loan_id)
-        .await
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| "loan not found".to_string())?;
-    let calc = load_loan_calc(pool, &row).await.map_err(|e| e.to_string())?;
-    let split = split_payment(&calc, amount_minor, calc.remaining_balance_minor);
     let id = Uuid::new_v4().to_string();
     let now = Utc::now().to_rfc3339();
     sqlx::query(
@@ -154,6 +153,91 @@ pub async fn record_regular_payment(
     update_balance(pool, loan_id, split.balance_after_minor)
         .await
         .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Replay all payment events in chronological order and refresh balance_after on each row.
+pub async fn rebuild_balances_from_payments(pool: &SqlitePool, loan_id: &str) -> Result<(), String> {
+    let row = get_loan(pool, loan_id)
+        .await
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "loan not found".to_string())?;
+
+    let events = sqlx::query_as::<_, (String, String, i64)>(
+        r#"SELECT id, event_type, amount_minor FROM payment_events
+           WHERE loan_id = ? ORDER BY paid_at ASC,
+           CASE event_type WHEN 'sonderzahlung' THEN 0 ELSE 1 END,
+           created_at ASC"#,
+    )
+    .bind(loan_id)
+    .fetch_all(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let principal_paid: i64 = sqlx::query_scalar(
+        r#"SELECT COALESCE(SUM(principal_portion_minor), 0) FROM payment_events
+           WHERE loan_id = ? AND event_type = 'regular'"#,
+    )
+    .bind(loan_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let extras_paid: i64 = sqlx::query_scalar(
+        r#"SELECT COALESCE(SUM(amount_minor), 0) FROM payment_events
+           WHERE loan_id = ? AND event_type = 'sonderzahlung'"#,
+    )
+    .bind(loan_id)
+    .fetch_one(pool)
+    .await
+    .map_err(|e| e.to_string())?;
+
+    let mut balance = row.original_principal_minor.unwrap_or_else(|| {
+        row.remaining_balance_minor + principal_paid + extras_paid
+    });
+
+    let calc_base = load_loan_calc(pool, &row).await.map_err(|e| e.to_string())?;
+
+    for (id, event_type, amount_minor) in events {
+        let (interest, principal, balance_after) = if event_type == "sonderzahlung" {
+            let balance_after = (balance - amount_minor).max(0);
+            (0i64, amount_minor, balance_after)
+        } else {
+            let mut calc = calc_base.clone();
+            calc.remaining_balance_minor = balance;
+            let split = split_payment(&calc, amount_minor, balance);
+            (split.interest_portion_minor, split.principal_portion_minor, split.balance_after_minor)
+        };
+        sqlx::query(
+            r#"UPDATE payment_events SET interest_portion_minor = ?, principal_portion_minor = ?,
+               balance_after_minor = ? WHERE id = ?"#,
+        )
+        .bind(interest)
+        .bind(principal)
+        .bind(balance_after)
+        .bind(&id)
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
+        balance = balance_after;
+    }
+
+    update_balance(pool, loan_id, balance).await.map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// Record a past-dated Sonderzahlung, rebuild balances, then catch up due regular payments.
+pub async fn record_backdated_sonderzahlung(
+    pool: &SqlitePool,
+    loan_id: &str,
+    amount_minor: i64,
+    paid_at: chrono::NaiveDate,
+    as_of: chrono::NaiveDate,
+) -> Result<(), String> {
+    record_sonderzahlung(pool, loan_id, amount_minor, paid_at).await?;
+    rebuild_balances_from_payments(pool, loan_id).await?;
+    apply_due_regular_payments(pool, loan_id, as_of).await?;
+    rebuild_balances_from_payments(pool, loan_id).await?;
     Ok(())
 }
 

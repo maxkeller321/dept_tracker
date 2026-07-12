@@ -9,57 +9,138 @@
 
   const dispatch = createEventDispatcher<{ saved: void; close: void }>();
 
-  let mode: 'quick' | 'advanced' = 'quick';
   let label = '';
   let balance = '';
   let aprPercent = '';
-  let paymentType: 'fixed' | 'apr' = 'fixed';
-  let fixedPayment = '';
+  let paymentType: 'tilgung_percent' | 'tilgung_euro' = 'tilgung_euro';
+  let tilgungPercent = '';
+  let tilgungEuro = '';
   let frequency: 'monthly' | 'yearly' = 'monthly';
   let startDate = todayIso();
+  let firstPaymentDate = todayIso();
   let error = '';
+  let saving = false;
   let recurringFields: RecurringSonderzahlungFields;
+  let prevOpen = false;
 
   $: tr = $t;
 
+  $: {
+    if (open && !prevOpen) resetForm();
+    prevOpen = open;
+  }
+
+  /** Prefer live DOM value; fall back to bind state. */
   function fieldValue(id: string, fallback: string) {
-    const el = document.getElementById(id) as HTMLInputElement | null;
-    return (el?.value ?? fallback).trim();
+    const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+    const dom = (el?.value ?? '').trim();
+    const bound = fallback.trim();
+    return dom || bound;
+  }
+
+  function parseEuroAmount(raw: string): number | null {
+    const normalized = raw.trim().replace(/\s/g, '').replace(',', '.');
+    if (!normalized) return null;
+    const value = Number.parseFloat(normalized);
+    return Number.isFinite(value) ? value : null;
+  }
+
+  function resetForm() {
+    label = '';
+    balance = '';
+    aprPercent = '';
+    paymentType = 'tilgung_euro';
+    tilgungPercent = '';
+    tilgungEuro = '';
+    frequency = 'monthly';
+    startDate = todayIso();
+    firstPaymentDate = todayIso();
+    error = '';
+    saving = false;
+    if (recurringFields) recurringFields.enabled = false;
   }
 
   async function save() {
     error = '';
+    const nameVal = fieldValue('label', label);
     const aprVal = fieldValue('apr', aprPercent);
     const balanceVal = fieldValue('balance', balance);
-    const fixedVal = fieldValue('fixed', fixedPayment);
-    if (!aprVal) {
-      error = tr('errors.aprRequired');
+    const percentVal = fieldValue('tilgung-pct', tilgungPercent);
+    const euroVal = fieldValue('tilgung-euro', tilgungEuro);
+    if (!nameVal) {
+      error = tr('errors.labelRequired');
+      document.getElementById('label')?.focus();
       return;
     }
-    if (paymentType === 'fixed' && !fixedVal) {
-      error = tr('errors.fixedRequired');
+    if (!aprVal) {
+      error = tr('errors.aprRequired');
+      document.getElementById('apr')?.focus();
+      return;
+    }
+    const balanceAmount = parseEuroAmount(balanceVal);
+    if (balanceAmount == null || balanceAmount <= 0) {
+      error = tr('errors.balanceRequired');
+      document.getElementById('balance')?.focus();
+      return;
+    }
+    if (paymentType === 'tilgung_euro' && !euroVal) {
+      error = tr('errors.tilgungEuroRequired');
+      document.getElementById('tilgung-euro')?.focus();
+      return;
+    }
+    if (paymentType === 'tilgung_percent' && !percentVal) {
+      error = tr('errors.tilgungPercentRequired');
+      document.getElementById('tilgung-pct')?.focus();
+      return;
+    }
+    const remaining = Math.round(balanceAmount * 100);
+    const aprParsed = parseEuroAmount(aprVal);
+    if (aprParsed == null || aprParsed < 0) {
+      error = tr('errors.aprRequired');
+      document.getElementById('apr')?.focus();
       return;
     }
     const body: Record<string, unknown> = {
-      label,
-      setup_mode: mode,
-      remaining_balance_minor: Math.round(parseFloat(balanceVal) * 100),
+      label: nameVal,
+      setup_mode: 'advanced',
+      remaining_balance_minor: remaining,
       payment_frequency: frequency,
       payment_type: paymentType,
-      apr_basis_points: Math.round(parseFloat(aprVal) * 100),
+      apr_basis_points: Math.round(aprParsed * 100),
     };
-    if (paymentType === 'fixed') {
-      body.fixed_payment_minor = Math.round(parseFloat(fixedVal) * 100);
+    if (paymentType === 'tilgung_euro') {
+      const euroAmount = parseEuroAmount(euroVal);
+      if (euroAmount == null || euroAmount <= 0) {
+        error = tr('errors.tilgungEuroRequired');
+        document.getElementById('tilgung-euro')?.focus();
+        return;
+      }
+      body.tilgung_euro_minor = Math.round(euroAmount * 100);
+    } else {
+      const pctAmount = parseEuroAmount(percentVal);
+      if (pctAmount == null || pctAmount < 0) {
+        error = tr('errors.tilgungPercentRequired');
+        document.getElementById('tilgung-pct')?.focus();
+        return;
+      }
+      body.tilgung_percent_basis_points = Math.round(pctAmount * 100);
+      body.original_principal_minor = remaining;
     }
-    if (mode === 'advanced') body.loan_start_date = startDate;
-    const recurring = recurringFields?.toApiPayload() ?? [];
-    if (recurring.length) body.recurring_sonderzahlungen = recurring;
+    body.loan_start_date = fieldValue('start', startDate);
+    body.first_payment_date = fieldValue('first-payment', firstPaymentDate);
+    if (recurringFields?.enabled) {
+      const recurring = recurringFields.toApiPayload();
+      if (recurring.length) body.recurring_sonderzahlungen = recurring;
+    }
+    saving = true;
     try {
       await api.createLoan(body);
       dispatch('saved');
       dispatch('close');
     } catch (e) {
       error = e instanceof Error ? e.message : tr('errors.saveFailed');
+    } finally {
+      saving = false;
     }
   }
 </script>
@@ -82,11 +163,13 @@
       on:click|stopPropagation={() => {}}
       on:keydown|stopPropagation={() => {}}
     >
-      <h2 id="add-loan-title">{tr('addLoan.title')}</h2>
-      <div class="tabs">
-        <button type="button" class:secondary={mode !== 'quick'} on:click={() => (mode = 'quick')}>{tr('addLoan.quick')}</button>
-        <button type="button" class:secondary={mode !== 'advanced'} on:click={() => (mode = 'advanced')}>{tr('addLoan.advanced')}</button>
+      <div class="modal-header">
+        <h2 id="add-loan-title">{tr('addLoan.title')}</h2>
+        {#if error}
+          <p class="error modal-error" role="alert">{error}</p>
+        {/if}
       </div>
+      <div class="modal-body">
       <div class="field">
         <label for="label">{tr('addLoan.name')}</label>
         <input id="label" bind:value={label} required />
@@ -103,14 +186,19 @@
       <div class="field">
         <label for="ptype">{tr('addLoan.paymentMethod')}</label>
         <select id="ptype" bind:value={paymentType}>
-          <option value="fixed">{tr('addLoan.fixedOption')}</option>
-          <option value="apr">{tr('addLoan.aprOption')}</option>
+          <option value="tilgung_percent">{tr('addLoan.tilgungPercentOption')}</option>
+          <option value="tilgung_euro">{tr('addLoan.tilgungEuroOption')}</option>
         </select>
       </div>
-      {#if paymentType === 'fixed'}
+      {#if paymentType === 'tilgung_percent'}
         <div class="field">
-          <label for="fixed">{tr('addLoan.periodicPayment')}</label>
-          <input id="fixed" type="number" step="0.01" bind:value={fixedPayment} required />
+          <label for="tilgung-pct">{tr('addLoan.tilgungPercent')}</label>
+          <input id="tilgung-pct" type="number" step="0.01" min="0" bind:value={tilgungPercent} required />
+        </div>
+      {:else}
+        <div class="field">
+          <label for="tilgung-euro">{tr('addLoan.tilgungEuro')}</label>
+          <input id="tilgung-euro" type="number" step="0.01" min="0" bind:value={tilgungEuro} required />
         </div>
       {/if}
       <div class="field">
@@ -120,24 +208,23 @@
           <option value="yearly">{tr('addLoan.yearly')}</option>
         </select>
       </div>
-      {#if mode === 'advanced'}
-        <div class="field">
-          <label for="start">{tr('addLoan.startDate')}</label>
-          <input id="start" type="date" bind:value={startDate} />
-        </div>
-      {/if}
+      <div class="field">
+        <label for="start">{tr('addLoan.startDate')}</label>
+        <input id="start" type="date" bind:value={startDate} />
+      </div>
+      <div class="field">
+        <label for="first-payment">{tr('addLoan.firstPaymentDate')}</label>
+        <input id="first-payment" type="date" bind:value={firstPaymentDate} />
+      </div>
       <RecurringSonderzahlungFields bind:this={recurringFields} />
-      {#if error}<p class="error">{error}</p>{/if}
-      <div class="actions">
-        <button type="button" class="secondary" on:click={() => dispatch('close')}>{tr('common.cancel')}</button>
-        <button type="button" on:click={save}>{tr('common.saveLoan')}</button>
+      <div class="modal-actions">
+        <button type="button" class="secondary" disabled={saving} on:click={() => dispatch('close')}>{tr('common.cancel')}</button>
+        <button type="button" class="primary-accent" disabled={saving} on:click={save}>
+          {saving ? tr('common.saving') : tr('common.saveLoan')}
+        </button>
+      </div>
       </div>
     </div>
   </div>
 {/if}
 
-<style>
-  .tabs { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
-  .actions { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 1rem; }
-  .hint { margin: 0.35rem 0 0; font-size: 0.8rem; }
-</style>

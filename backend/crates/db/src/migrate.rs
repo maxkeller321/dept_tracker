@@ -24,14 +24,25 @@ pub async fn init_pool(data_dir: &Path) -> Result<SqlitePool, sqlx::Error> {
         .await
 }
 
-pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
-    let sql = include_str!("../../../migrations/001_initial.sql");
+async fn run_sql_script(pool: &SqlitePool, sql: &str) -> Result<(), sqlx::Error> {
     for statement in sql.split(';') {
         let stmt = statement.trim();
         if !stmt.is_empty() {
             sqlx::query(stmt).execute(pool).await?;
         }
     }
+    Ok(())
+}
+
+pub async fn run_migrations(pool: &SqlitePool) -> Result<(), sqlx::Error> {
+    run_sql_script(pool, include_str!("../../../migrations/001_initial.sql")).await?;
+    // Idempotent ALTERs for existing databases
+    let _ = run_sql_script(pool, include_str!("../../../migrations/002_tilgung_auth.sql")).await;
+    let _ = run_sql_script(
+        pool,
+        include_str!("../../../migrations/003_first_payment_date.sql"),
+    )
+    .await;
     Ok(())
 }
 

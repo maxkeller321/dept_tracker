@@ -11,26 +11,20 @@
   $: displayMessage = interestMessage(message, tr);
 </script>
 
-<section class="interest" aria-label={tr('interest.regionLabel')}>
+<section class="panel interest" aria-label={tr('interest.regionLabel')}>
   <h3>{tr('interest.title')}</h3>
   {#if displayMessage}
     <p class="muted">{displayMessage}</p>
   {:else}
-    <p>
-      {tr('interest.paidToDate')}: <strong>{formatMoney(interestPaidMinor ?? 0, currency)}</strong>
-    </p>
-    <p>
-      {tr('interest.remaining')}: <strong>{formatMoney(interestRemainingMinor ?? 0, currency)}</strong>
-    </p>
+    <div class="mini-stat-row">
+      <div class="mini-stat">
+        <span class="label">{tr('interest.paidToDate')}</span>
+        <span class="value tabular">{formatMoney(interestPaidMinor ?? 0, currency)}</span>
+      </div>
+      <div class="mini-stat">
+        <span class="label">{tr('interest.remaining')}</span>
+        <span class="value tabular">{formatMoney(interestRemainingMinor ?? 0, currency)}</span>
+      </div>
+    </div>
   {/if}
 </section>
-
-<style>
-  h3 {
-    font-size: 0.95rem;
-    margin: 1rem 0 0.5rem;
-  }
-  .interest p {
-    margin: 0.25rem 0;
-  }
-</style>

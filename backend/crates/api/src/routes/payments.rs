@@ -30,11 +30,20 @@ pub async fn record_payment(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let paid_at = chrono::NaiveDate::parse_from_str(&body.paid_at, "%Y-%m-%d")
         .map_err(|_| ApiError::bad_request("invalid paid_at"))?;
+    let row = db::loans::get_loan(&state.pool, &loan_id)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?
+        .ok_or_else(|| ApiError::not_found("loan not found"))?;
+    let calc = db::loans::load_loan_calc(&state.pool, &row)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let split = domain::payment_split::split_payment(&calc, body.amount_minor, calc.remaining_balance_minor);
     db::payment_events::record_regular_payment(
         &state.pool,
         &loan_id,
         body.amount_minor,
         paid_at,
+        split,
         body.note,
     )
     .await

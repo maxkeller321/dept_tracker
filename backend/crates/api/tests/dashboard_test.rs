@@ -1,21 +1,19 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-async fn test_app() -> axum::Router {
-    let db = db::test_support::test_pool().await;
-    let state = api::AppState { pool: db.pool };
-    api::router::app(state, None)
-}
-
 #[tokio::test]
 async fn dashboard_empty_ok() {
-    let app = test_app().await;
+    let app = common::app().await;
+    let cookie = common::session_cookie(&app).await;
     let response = app
         .oneshot(
             Request::builder()
                 .uri("/api/v1/dashboard")
+                .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
         )

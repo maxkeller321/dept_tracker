@@ -1,17 +1,15 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use chrono::{Months, Utc};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-async fn test_app() -> axum::Router {
-    let db = db::test_support::test_pool().await;
-    api::router::app(api::AppState { pool: db.pool }, None)
-}
-
 #[tokio::test]
 async fn auto_applies_due_regular_payments() {
-    let app = test_app().await;
+    let app = common::app().await;
+    let cookie = common::session_cookie(&app).await;
     let start = Utc::now()
         .date_naive()
         .checked_sub_months(Months::new(3))
@@ -21,9 +19,10 @@ async fn auto_applies_due_regular_payments() {
         "label": "Auto Loan",
         "setup_mode": "advanced",
         "remaining_balance_minor": 1_000_000,
+        "original_principal_minor": 1_000_000,
         "payment_frequency": "monthly",
-        "payment_type": "fixed",
-        "fixed_payment_minor": 50_000,
+        "payment_type": "tilgung_euro",
+        "tilgung_euro_minor": 50_000,
         "apr_basis_points": 400,
         "loan_start_date": start
     });
@@ -34,6 +33,7 @@ async fn auto_applies_due_regular_payments() {
                 .method("POST")
                 .uri("/api/v1/loans")
                 .header("content-type", "application/json")
+                .header("cookie", &cookie)
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -49,6 +49,7 @@ async fn auto_applies_due_regular_payments() {
         .oneshot(
             Request::builder()
                 .uri("/api/v1/dashboard")
+                .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -65,6 +66,7 @@ async fn auto_applies_due_regular_payments() {
         .oneshot(
             Request::builder()
                 .uri(format!("/api/v1/loans/{id}/payments"))
+                .header("cookie", &cookie)
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -75,11 +77,11 @@ async fn auto_applies_due_regular_payments() {
     assert!(pay_json.len() >= 3);
     assert!(pay_json.iter().all(|p| p["event_type"] == "regular"));
 
-    // Idempotent second dashboard load
     let dash2 = app
         .oneshot(
             Request::builder()
                 .uri("/api/v1/dashboard")
+                .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
         )

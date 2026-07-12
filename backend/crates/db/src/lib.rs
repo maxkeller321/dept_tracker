@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod export;
 pub mod import;
 pub mod loans;

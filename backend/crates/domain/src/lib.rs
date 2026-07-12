@@ -4,6 +4,7 @@ pub mod due_payments;
 pub mod interest;
 pub mod money;
 pub mod payment_split;
+pub mod payoff_timeline;
 pub mod projection;
 pub mod types;
 pub mod validation;

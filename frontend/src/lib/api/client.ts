@@ -9,11 +9,27 @@ export interface LoanSummary {
   id: string;
   label: string;
   remaining_balance: Money;
+  /** Original loan amount at origination; null if not recorded. */
+  original_principal: Money | null;
   periodic_payment: Money;
   payment_frequency: string;
   last_payment_date: string | null;
   projected_payoff_date: string | null;
   progress_percent: number;
+}
+
+export interface PayoffTimelineSeries {
+  id: string;
+  label: string;
+  balances_minor: number[];
+  /** Total future interest still to be paid at each timeline point. */
+  interest_remaining_minor: number[];
+}
+
+export interface PayoffTimeline {
+  dates: string[];
+  series: PayoffTimelineSeries[];
+  as_of_index: number;
 }
 
 export interface DashboardResponse {
@@ -22,10 +38,31 @@ export interface DashboardResponse {
     total_monthly_obligation: Money;
   };
   loans: LoanSummary[];
+  payoff_timeline: PayoffTimeline;
+}
+
+export interface AmortizationRow {
+  date: string;
+  payment_minor: number;
+  interest_minor: number;
+  principal_minor: number;
+  balance_minor: number;
+}
+
+export interface AmortizationSchedule {
+  total_payments: number;
+  rows: AmortizationRow[];
+}
+
+export interface AuthStatus {
+  auth_enabled: boolean;
+  needs_setup: boolean;
+  authenticated: boolean;
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, {
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...init?.headers },
     ...init,
   });
@@ -38,6 +75,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
+  authStatus: () => request<AuthStatus>('/auth/status'),
+
+  register: (username: string, password: string) =>
+    request<{ ok: boolean }>('/auth/register', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+
+  login: (username: string, password: string) =>
+    request<{ ok: boolean }>('/auth/login', {
+      method: 'POST',
+      body: JSON.stringify({ username, password }),
+    }),
+
+  logout: () => request<void>('/auth/logout', { method: 'POST' }),
+
   dashboard: (includeArchived = false) =>
     request<DashboardResponse>(`/dashboard?include_archived=${includeArchived}`),
 
@@ -91,4 +144,10 @@ export const api = {
 
   archiveLoan: (id: string) =>
     request<unknown>(`/loans/${id}/archive`, { method: 'POST' }),
+
+  loanAmortization: (id: string) =>
+    request<AmortizationSchedule>(`/loans/${id}/amortization`),
+
+  combinedAmortization: () =>
+    request<AmortizationSchedule>('/amortization'),
 };

@@ -2,6 +2,7 @@ use axum::extract::{Query, State};
 use axum::Json;
 use chrono::Utc;
 use domain::build_dashboard;
+use domain::projection::build_combined_schedule;
 use serde::Deserialize;
 use crate::error::ApiError;
 use crate::AppState;
@@ -18,6 +19,7 @@ pub async fn get_dashboard(
 ) -> Result<Json<serde_json::Value>, ApiError> {
     let currency = db::get_currency(&state.pool).await.map_err(|e| ApiError::internal(e.to_string()))?;
     let as_of = Utc::now().date_naive();
+    // Date-only cutoff: apply all installments due on or before today (local calendar date).
     db::payment_events::sync_all_due_regular_payments(&state.pool, as_of)
         .await
         .map_err(ApiError::bad_request)?;
@@ -41,4 +43,29 @@ pub async fn get_dashboard(
     };
     let dashboard = build_dashboard(&active, &currency, as_of);
     Ok(Json(serde_json::to_value(dashboard).unwrap()))
+}
+
+pub async fn combined_amortization(
+    State(state): State<AppState>,
+) -> Result<Json<serde_json::Value>, ApiError> {
+    let as_of = Utc::now().date_naive();
+    db::payment_events::sync_all_due_regular_payments(&state.pool, as_of)
+        .await
+        .map_err(ApiError::bad_request)?;
+    let rows = db::loans::list_loans(&state.pool, false)
+        .await
+        .map_err(|e| ApiError::internal(e.to_string()))?;
+    let mut calcs = Vec::new();
+    for row in rows {
+        calcs.push(
+            db::loans::load_loan_calc(&state.pool, &row)
+                .await
+                .map_err(|e| ApiError::internal(e.to_string()))?,
+        );
+    }
+    let schedule = build_combined_schedule(&calcs, as_of);
+    Ok(Json(serde_json::json!({
+        "total_payments": schedule.len(),
+        "rows": schedule,
+    })))
 }

@@ -1,20 +1,19 @@
+mod common;
+
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use http_body_util::BodyExt;
 use tower::ServiceExt;
 
-async fn test_app() -> axum::Router {
-    let db = db::test_support::test_pool().await;
-    api::router::app(api::AppState { pool: db.pool }, None)
-}
-
-async fn seed_apr_loan(app: &axum::Router) -> String {
+async fn seed_percent_loan(app: &axum::Router, cookie: &str) -> String {
     let body = serde_json::json!({
-        "label": "APR Loan",
+        "label": "Percent Loan",
         "setup_mode": "quick",
         "remaining_balance_minor": 10000000,
+        "original_principal_minor": 10000000,
         "payment_frequency": "monthly",
-        "payment_type": "apr",
+        "payment_type": "tilgung_percent",
+        "tilgung_percent_basis_points": 200,
         "apr_basis_points": 375
     });
     let response = app
@@ -24,6 +23,7 @@ async fn seed_apr_loan(app: &axum::Router) -> String {
                 .method("POST")
                 .uri("/api/v1/loans")
                 .header("content-type", "application/json")
+                .header("cookie", cookie)
                 .body(Body::from(body.to_string()))
                 .unwrap(),
         )
@@ -38,12 +38,14 @@ async fn seed_apr_loan(app: &axum::Router) -> String {
 
 #[tokio::test]
 async fn loan_detail_includes_interest_fields() {
-    let app = test_app().await;
-    let id = seed_apr_loan(&app).await;
+    let app = common::app().await;
+    let cookie = common::session_cookie(&app).await;
+    let id = seed_percent_loan(&app, &cookie).await;
     let response = app
         .oneshot(
             Request::builder()
                 .uri(format!("/api/v1/loans/{id}"))
+                .header("cookie", cookie)
                 .body(Body::empty())
                 .unwrap(),
         )

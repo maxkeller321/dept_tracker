@@ -59,9 +59,12 @@ async fn export_loan_json(pool: &SqlitePool, row: &LoanRow) -> Result<serde_json
             "remaining_balance_minor": row.remaining_balance_minor,
             "payment_frequency": row.payment_frequency,
             "payment_type": row.payment_type,
+            "tilgung_euro_minor": row.fixed_payment_minor,
             "fixed_payment_minor": row.fixed_payment_minor,
+            "tilgung_percent_basis_points": row.tilgung_percent_basis_points,
             "apr_basis_points": row.apr_basis_points,
             "loan_start_date": row.loan_start_date,
+            "first_payment_date": row.first_payment_date,
             "created_at": row.created_at,
         },
         "recurring_sonderzahlungen": recurring.iter().map(|(id, amount, month, day, enabled)| serde_json::json!({
